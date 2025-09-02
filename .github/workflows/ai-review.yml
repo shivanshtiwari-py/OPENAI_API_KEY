@@ -1,32 +1,49 @@
-name: AI Code Review
+name: LLM Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+    types: [opened, synchronize]
 
 jobs:
   review:
     runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write   # required to post comments
+
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Get PR diff
+        id: diff
+        run: |
+          echo "Fetching PR diff..."
+          gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
+            --jq '.diff_url' | xargs curl -s > pr.diff
+          echo "✅ PR diff saved to pr.diff"
 
-      - name: Install deps
-        run: pip install requests
+      - name: Send diff to Gemini
+        id: gemini
+        run: |
+          echo "Sending diff to Gemini..."
+          DIFF=$(cat pr.diff | head -c 6000) # limit to 6000 chars for safety
+          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"contents\": [{
+                \"parts\":[{\"text\": \"Review this GitHub pull request diff and suggest improvements as a short summary with bullet points. Keep it concise:\\n$DIFF\"}]
+              }]
+            }")
+          REVIEW=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text')
+          echo "REVIEW_OUTPUT<<EOF" >> $GITHUB_ENV
+          echo "$REVIEW" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      - name: Run AI review
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python .github/scripts/ai_review.py
+      - name: Post review comment
+        run: |
+          echo "Posting review comment to PR..."
+          gh pr review ${{ github.event.pull_request.number }} \
+            --comment \
+            --body "${{ env.REVIEW_OUTPUT }}"
+          echo "✅ Review comment posted!"
