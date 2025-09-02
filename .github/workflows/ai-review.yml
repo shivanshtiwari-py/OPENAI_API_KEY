@@ -9,11 +9,16 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      pull-requests: write   # required to post comments
+      pull-requests: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq gh
 
       - name: Get PR diff
         id: diff
@@ -27,7 +32,7 @@ jobs:
         id: gemini
         run: |
           echo "Sending diff to Gemini..."
-          DIFF=$(cat pr.diff | head -c 6000) # limit to 6000 chars for safety
+          DIFF=$(cat pr.diff | head -c 6000)
           RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${{ secrets.GEMINI_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{
@@ -35,7 +40,8 @@ jobs:
                 \"parts\":[{\"text\": \"Review this GitHub pull request diff and suggest improvements as a short summary with bullet points. Keep it concise:\\n$DIFF\"}]
               }]
             }")
-          REVIEW=$(echo $RESPONSE | jq -r '.candidates[0].content.parts[0].text')
+          echo $RESPONSE > gemini_response.json
+          REVIEW=$(cat gemini_response.json | jq -r '.candidates[0].content.parts[0].text')
           echo "REVIEW_OUTPUT<<EOF" >> $GITHUB_ENV
           echo "$REVIEW" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
